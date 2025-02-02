@@ -11,7 +11,11 @@ declare module 'ioredis' {
       now: number,
       tokensPerSecond: number,
       bucketCapacity: number,
-      maxConcurrency: number
+      maxConcurrency: number,
+      baseMargin: number,
+      concurrencyMultiplier: number,
+      concurrencyFactor: number,
+      baseFactor: number
     ): Promise<[number, number, number]>;
   }
 
@@ -38,6 +42,16 @@ interface RateLimitResponse {
   remaining: number;
 }
 
+interface RateLimitConfig {
+  bucketCapacity: number;
+  tokensPerSecond: number;
+  maxConcurrency?: number;
+  baseMargin?: number;
+  concurrencyMultiplier?: number;
+  concurrencyFactor?: number;
+  baseFactor?: number;
+}
+
 export class ShopifyRateLimiter {
   private readonly redis: Redis;
   private readonly syncScript: string;
@@ -56,6 +70,10 @@ export class ShopifyRateLimiter {
       local tokensPerSecond = tonumber(ARGV[3])
       local bucketCapacity = tonumber(ARGV[4])
       local maxConcurrency = tonumber(ARGV[5])
+      local baseMargin = tonumber(ARGV[6])
+      local concurrencyMultiplier = tonumber(ARGV[7])
+      local concurrencyFactor = tonumber(ARGV[8])
+      local baseFactor = tonumber(ARGV[9])
       
       -- Get current state and Shopify state
       local currentTokens = tonumber(redis.call('get', tokenKey) or 0)
@@ -77,8 +95,7 @@ export class ShopifyRateLimiter {
       currentTokens = math.max(0, currentTokens - drained)
       
       -- Dynamic safety margin based on concurrency
-      local baseMargin = 100
-      local concurrencyMargin = math.min(maxConcurrency, currentConcurrency) * 20
+      local concurrencyMargin = math.min(maxConcurrency, currentConcurrency) * concurrencyMultiplier
       local safetyMargin = baseMargin + concurrencyMargin
       
       -- Adjust effective capacity based on current concurrency
@@ -91,7 +108,7 @@ export class ShopifyRateLimiter {
       -- Check if operation is allowed
       if currentTokens + cost <= effectiveCapacity then
         -- More conservative token consumption for high concurrency
-        local adjustedCost = cost * (1 + (currentConcurrency / maxConcurrency) * 0.2)
+        local adjustedCost = cost * (1 + (currentConcurrency / maxConcurrency) * concurrencyFactor)
         redis.call('set', tokenKey, currentTokens + adjustedCost)
         redis.call('set', timestampKey, now)
         
@@ -101,10 +118,9 @@ export class ShopifyRateLimiter {
       
       -- Calculate wait time with dynamic safety factor
       local tokensNeeded = cost + currentTokens - effectiveCapacity
-      local baseFactor = 1.1
-      local concurrencyFactor = 1 + (currentConcurrency / maxConcurrency) * 0.2
+      local concurrencyFactorWait = 1 + (currentConcurrency / maxConcurrency) * concurrencyFactor
       local waitTimeMs = math.ceil(
-        (tokensNeeded / tokensPerSecond) * 1000 * baseFactor * concurrencyFactor
+        (tokensNeeded / tokensPerSecond) * 1000 * baseFactor * concurrencyFactorWait
       )
       
       local remaining = math.max(0, effectiveCapacity - currentTokens)
@@ -117,15 +133,7 @@ export class ShopifyRateLimiter {
     });
   }
 
-  async checkLimit(
-    shop: string,
-    cost: number,
-    config: {
-      bucketCapacity: number;
-      tokensPerSecond: number;
-      maxConcurrency?: number;
-    }
-  ): Promise<RateLimitResponse> {
+  async checkLimit(shop: string, cost: number, config: RateLimitConfig): Promise<RateLimitResponse> {
     const tokenKey = `shopify:${shop}:tokens`;
     const timestampKey = `shopify:${shop}:timestamp`;
     const shopifyStateKey = `shopify:${shop}:state`;
@@ -140,7 +148,11 @@ export class ShopifyRateLimiter {
       Date.now(),
       config.tokensPerSecond,
       config.bucketCapacity,
-      config.maxConcurrency || 5
+      config.maxConcurrency || 5,
+      config.baseMargin || 70,
+      config.concurrencyMultiplier || 10,
+      config.concurrencyFactor || 0.2,
+      config.baseFactor || 1.1
     )) as [number, number, number];
 
     return {

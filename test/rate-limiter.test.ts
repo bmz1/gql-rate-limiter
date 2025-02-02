@@ -226,7 +226,7 @@ describe('ShopifyRateLimiter', () => {
       it('should handle zero cost requests', async () => {
         const result = await limiter.checkLimit('test-shop', 0, DEFAULT_CONFIG);
         expect(result.allowed).toBe(true);
-        expect(result.remaining).toBe(DEFAULT_CONFIG.bucketCapacity - 100); // Base safety margin
+        expect(result.remaining).toBe(DEFAULT_CONFIG.bucketCapacity - 70); // Base safety margin
       });
 
       it('should handle missing maxConcurrency config', async () => {

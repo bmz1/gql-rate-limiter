@@ -14,9 +14,9 @@ A Redis-based distributed rate limiter specifically designed for Shopify's Graph
 ## Installation
 
 ```bash
-npm install @bmz1/graphql-rate-limiter
+npm install @bmz1/gql-rate-limiter
 # or
-yarn add @bmz1/graphql-rate-limiter
+yarn add @bmz1/gql-rate-limiter
 ```
 
 ### Requirements
@@ -29,7 +29,7 @@ yarn add @bmz1/graphql-rate-limiter
 
 ```typescript
 import { Redis } from 'ioredis';
-import { ShopifyRateLimiter } from '@bmz1/graphql-rate-limiter';
+import { ShopifyRateLimiter } from '@bmz1/gql-rate-limiter';
 
 // Initialize Redis client
 const redis = new Redis();

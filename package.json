@@ -1,5 +1,5 @@
 {
-  "name": "graphql-distributed-rate-limiter",
+  "name": "@bmz1/gql-rate-limiter",
   "version": "1.0.0",
   "description": "A distributed leaky bucket rate limiter using Redis and TypeScript",
   "type": "module",

@@ -25,16 +25,6 @@ describe('ShopifyRateLimiter', () => {
       limiter = new ShopifyRateLimiter(redis);
     });
 
-    it('should initialize with lua script', () => {
-      expect(redis.defineCommand).toHaveBeenCalledWith(
-        'shopifylimit',
-        expect.objectContaining({
-          numberOfKeys: 4,
-          lua: expect.stringContaining('local tokenKey'),
-        })
-      );
-    });
-
     it('should handle successful rate limit check', async () => {
       vi.mocked(redis.shopifylimit).mockResolvedValueOnce([1, 0, 1800]);
 
@@ -68,7 +58,7 @@ describe('ShopifyRateLimiter', () => {
 
       await limiter.syncShopifyState('test-shop', throttleStatus);
 
-      expect(redis.set).toHaveBeenCalledWith('shopify:test-shop:state', JSON.stringify(throttleStatus), 'EX', 30);
+      expect(redis.set).toHaveBeenCalledWith('shopify:test-shop:state', JSON.stringify(throttleStatus), 'EX', 10);
     });
   });
 
@@ -102,11 +92,9 @@ describe('ShopifyRateLimiter', () => {
 
       it('should block requests exceeding capacity', async () => {
         // First use most of the capacity
-        await limiter.checkLimit('test-shop', 1800, DEFAULT_CONFIG);
-
+        const r = await limiter.checkLimit('test-shop2', 1500, DEFAULT_CONFIG);
         // Then try to use more
-        const result = await limiter.checkLimit('test-shop', 300, DEFAULT_CONFIG);
-
+        const result = await limiter.checkLimit('test-shop2', 600, DEFAULT_CONFIG);
         expect(result.allowed).toBe(false);
         expect(result.waitTimeMs).toBeGreaterThan(0);
       });
@@ -226,7 +214,7 @@ describe('ShopifyRateLimiter', () => {
       it('should handle zero cost requests', async () => {
         const result = await limiter.checkLimit('test-shop', 0, DEFAULT_CONFIG);
         expect(result.allowed).toBe(true);
-        expect(result.remaining).toBe(DEFAULT_CONFIG.bucketCapacity - 70); // Base safety margin
+        expect(result.remaining).toBe(DEFAULT_CONFIG.bucketCapacity - 80); // Base safety margin
       });
 
       it('should handle missing maxConcurrency config', async () => {

@@ -106,6 +106,7 @@ export class ShopifyRateLimiter {
     ARGV[6] - concurrencyMultiplier: Extra margin per concurrent request
     ARGV[7] - concurrencyFactor: High concurrency cost adjustment
     ARGV[8] - baseFactor: Wait time adjustment
+    ARGV[9] - debug: Enable debug logging (1 for true, 0 for false)
 
   Returns: [allowed, waitTimeMs, remaining]
     allowed: 1 if allowed, 0 if throttled
@@ -140,6 +141,14 @@ if not baseFactor then error("Invalid baseFactor") end
 
 local debug = tonumber(ARGV[9]) == 1
 
+-- Helper function for debug logging
+local function debugLog(message)
+  if debug then
+    redis.call('lpush', 'shopify:debug:log', message)
+    redis.call('ltrim', 'shopify:debug:log', 0, 999) -- Keep last 1000 entries
+  end
+end
+
 -- Get current server time in milliseconds
 local timeArr = redis.call('TIME')
 local now = tonumber(timeArr[1]) * 1000 + math.floor(tonumber(timeArr[2]) / 1000)
@@ -166,8 +175,7 @@ if shopifyState then
       tokensPerSecond = state.restoreRate
       bucketCapacity = state.maximumAvailable
       
-      -- Log state update
-      redis.call('lpush', 'shopify:debug:log', string.format(
+      debugLog(string.format(
         'Shopify state sync - Available: %d, Rate: %d, Max: %d',
         state.currentlyAvailable,
         state.restoreRate,
@@ -205,7 +213,7 @@ if capacityPercentage < 30 then
     dynamicConcurrencyMultiplier = dynamicConcurrencyMultiplier * 1.5
   end
   
-  redis.call('lpush', 'shopify:debug:log', string.format(
+  debugLog(string.format(
     'Low capacity alert - %.2f%% remaining, margins increased by %.2fx',
     capacityPercentage,
     marginMultiplier
@@ -224,8 +232,7 @@ local adjustedCost = cost * capacityFactor * concurrencyFactor
 
 -- Check if we can proceed
 if currentTokens + adjustedCost <= effectiveCapacity then
-  -- Log approval
-  redis.call('lpush', 'shopify:debug:log', string.format(
+  debugLog(string.format(
     'Request approved - Capacity: %.2f%%, Tokens: %d, Cost: %.2f, Margin: %.2f',
     capacityPercentage,
     currentTokens,
@@ -248,8 +255,7 @@ local tokensNeeded = adjustedCost + currentTokens - effectiveCapacity
 local waitFactor = baseFactor * capacityFactor
 local waitTimeMs = math.ceil((tokensNeeded / tokensPerSecond) * 1000 * waitFactor)
 
--- Log throttling
-redis.call('lpush', 'shopify:debug:log', string.format(
+debugLog(string.format(
   'Request throttled - Capacity: %.2f%%, Tokens: %d, Needed: %.2f, Wait: %d',
   capacityPercentage,
   currentTokens,

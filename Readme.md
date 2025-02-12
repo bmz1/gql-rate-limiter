@@ -1,73 +1,80 @@
-# Shopify GraphQL Rate Limiter
+# GraphQL Rate Limiter
 
-A Redis-based distributed rate limiter specifically designed for Shopify's GraphQL API. Handles concurrent requests, multiple stores, and automatically syncs with Shopify's throttle status.
+A sophisticated Redis-based rate limiter specifically designed for Shopify API applications, featuring dynamic token bucket implementation with concurrency control and adaptive safety margins.
 
 ## Features
 
-- 🚀 Distributed rate limiting using Redis
-- 🔄 Automatic sync with Shopify's throttle status
-- 📊 Dynamic concurrency handling
-- 🏢 Multi-store support
-- 🔬 Precise cost tracking
-- ⚡ High performance with Lua scripts
+- Token bucket algorithm with dynamic safety margins
+- Automatic synchronization with Shopify's throttle state
+- Concurrency tracking and management
+- Adaptive cost calculation based on capacity and concurrent requests
+- Debug logging capabilities
+- TypeScript support with full type definitions
 
 ## Installation
 
 ```bash
-npm install @bmz1/gql-rate-limiter
-# or
-yarn add @bmz1/gql-rate-limiter
+npm install @bmz_1/graphql-rate-limiter ioredis
 ```
-
-### Requirements
-
-- Redis 6.0 or higher
-- Node.js 16.0 or higher
-- TypeScript 4.5 or higher (for TypeScript users)
 
 ## Quick Start
 
 ```typescript
 import { Redis } from 'ioredis';
-import { ShopifyRateLimiter } from '@bmz1/gql-rate-limiter';
+import { ShopifyRateLimiter } from '@bmz_1/graphql-rate-limiter';
 
 // Initialize Redis client
 const redis = new Redis();
 
 // Create rate limiter instance
-const limiter = new ShopifyRateLimiter(redis);
+const rateLimiter = new ShopifyRateLimiter(redis);
 
-// Use in your Shopify API calls
-async function makeGraphQLRequest() {
-  const result = await limiter.checkLimit(
-    'my-shop.myshopify.com',
-    20, // Expected query cost
-    {
-      bucketCapacity: 2000,
-      tokensPerSecond: 100,
-      maxConcurrency: 5
+// Configure and use the rate limiter
+const config = {
+  bucketCapacity: 1000,
+  tokensPerSecond: 50,
+  maxConcurrency: 5
+};
+
+try {
+  const result = await rateLimiter.checkLimit('my-shop.myshopify.com', 10, config);
+  if (result.allowed) {
+    // Proceed with API call
+    try {
+      // Your API call here
+    } finally {
+      // Always release concurrency after operation
+      await rateLimiter.releaseConcurrency('my-shop.myshopify.com');
     }
-  );
-
-  if (!result.allowed) {
-    console.log(`Rate limit exceeded. Wait ${result.waitTimeMs}ms`);
+  } else {
+    // Wait for suggested time
     await new Promise(resolve => setTimeout(resolve, result.waitTimeMs));
   }
+} catch (error) {
+  console.error('Rate limiting error:', error);
+}
+```
 
-  // Make your Shopify GraphQL request here...
-  const response = await shopifyClient.query(/* ... */);
+## Configuration Options
 
-  // Sync actual cost with Shopify
-  await limiter.syncShopifyState(
-    'my-shop.myshopify.com',
-    response.extensions.cost.throttleStatus
-  );
+The rate limiter accepts the following configuration parameters:
+
+```typescript
+interface RateLimitConfig {
+  bucketCapacity: number;          // Maximum token capacity
+  tokensPerSecond: number;         // Token restoration rate
+  maxConcurrency?: number;         // Maximum concurrent requests (default: 5)
+  baseMargin?: number;             // Base safety margin (default: 70)
+  concurrencyMultiplier?: number;  // Safety margin per concurrent request (default: 10)
+  concurrencyFactor?: number;      // High concurrency cost adjustment (default: 0.2)
+  baseFactor?: number;             // Wait time calculation factor (default: 1.1)
+  debug?: boolean;                 // Enable debug logging (default: false)
 }
 ```
 
 ## API Reference
 
-### ShopifyRateLimiter
+### ShopifyRateLimiter Class
 
 #### Constructor
 
@@ -75,139 +82,143 @@ async function makeGraphQLRequest() {
 constructor(redis: Redis)
 ```
 
+Creates a new instance of the rate limiter.
+
+- `redis`: An instance of ioredis client
+
 #### Methods
 
-##### checkLimit
+##### `checkLimit(shop: string, cost: number, config: RateLimitConfig): Promise<RateLimitResponse>`
 
-```typescript
-async checkLimit(
-  shop: string,
-  cost: number,
-  config: {
-    bucketCapacity: number;
-    tokensPerSecond: number;
-    maxConcurrency?: number;
-  }
-): Promise<RateLimitResponse>
-```
+Checks if an operation is allowed under the current rate limits.
 
 Parameters:
-- `shop`: Shopify store domain or storeId
-- `cost`: Expected query cost
-- `config`: Rate limit configuration
-  - `bucketCapacity`: Maximum token capacity (usually 2000)
-  - `tokensPerSecond`: Token restore rate (usually 100)
-  - `maxConcurrency`: Maximum concurrent requests (default: 5)
+- `shop`: Shopify store domain
+- `cost`: Token cost for the operation
+- `config`: Rate limiting configuration
 
 Returns:
 ```typescript
 interface RateLimitResponse {
-  allowed: boolean;     // Whether request is allowed
-  waitTimeMs: number;   // Time to wait if not allowed
-  remaining: number;    // Remaining tokens
+  allowed: boolean;     // Whether the operation is allowed
+  waitTimeMs: number;   // Suggested wait time if throttled
+  remaining: number;    // Remaining token capacity
 }
 ```
 
-##### syncShopifyState
+##### `releaseConcurrency(shop: string): Promise<void>`
 
-```typescript
-async syncShopifyState(
-  shop: string,
-  throttleStatus: ShopifyThrottle
-): Promise<void>
-```
+Safely releases a concurrency slot for the specified shop.
+
+##### `syncShopifyState(shop: string, throttleStatus: ShopifyThrottle): Promise<void>`
+
+Synchronizes the rate limiter with Shopify's current throttle state.
 
 Parameters:
-- `shop`: Shopify store domain
-- `throttleStatus`: Shopify's throttle status
-  ```typescript
-  interface ShopifyThrottle {
-    maximumAvailable: number;
-    currentlyAvailable: number;
-    restoreRate: number;
-  }
-  ```
-
-## Advanced Usage
-
-### Queue Processing
-
+- `throttleStatus`:
 ```typescript
-import pLimit from 'p-limit';
-
-async function processQueue() {
-  const limit = pLimit(5); // Match with maxConcurrency
-  const tasks = requests.map(req => limit(() => 
-    processWithRateLimit(req)
-  ));
-  
-  await Promise.all(tasks);
-}
-
-async function processWithRateLimit(request) {
-  const result = await limiter.checkLimit(/* ... */);
-  if (!result.allowed) {
-    await new Promise(resolve => 
-      setTimeout(resolve, result.waitTimeMs + 500)
-    );
-  }
-  // Process request...
+interface ShopifyThrottle {
+  maximumAvailable: number;
+  currentlyAvailable: number;
+  restoreRate: number;
 }
 ```
 
-### Multi-store Setup
+##### `cleanupShop(shop: string): Promise<void>`
 
-The rate limiter automatically handles multiple stores independently:
+Cleans up all rate limiting data for a specific shop.
+
+## Advanced Features
+
+### Dynamic Safety Margins
+
+The rate limiter implements dynamic safety margins that automatically adjust based on:
+- Current capacity utilization
+- Number of concurrent requests
+- Shopify's throttle state
+
+When capacity drops below 30%, safety margins are automatically increased to prevent throttling.
+
+### Adaptive Cost Calculation
+
+Request costs are dynamically adjusted based on:
+- Current capacity utilization
+- Concurrent request count
+- Base operation cost
+
+This ensures better resource distribution under high load.
+
+### Shopify State Synchronization
+
+The rate limiter can sync with Shopify's throttle state to maintain accurate limits:
 
 ```typescript
-// Store 1
-await limiter.checkLimit('store1.myshopify.com', 20, config);
-
-// Store 2 (won't be affected by Store 1's limits)
-await limiter.checkLimit('store2.myshopify.com', 20, config);
+// After receiving Shopify's throttle headers
+await rateLimiter.syncShopifyState('my-shop.myshopify.com', {
+  maximumAvailable: 1000,
+  currentlyAvailable: 950,
+  restoreRate: 50
+});
 ```
 
-## Running Tests
+### Debug Logging
 
-```bash
-# Start Redis for testing
-docker-compose up -d
+Enable debug logging for detailed insights:
 
-# Run all tests
-npm test
-
-# Run with coverage
-npm test -- --coverage
+```typescript
+const result = await rateLimiter.checkLimit('my-shop.myshopify.com', 10, {
+  ...config,
+  debug: true
+});
 ```
 
-## How It Works
+## Best Practices
 
-The rate limiter uses a combination of:
-1. Leaky bucket algorithm
-2. Redis Lua scripts for atomicity
-3. Dynamic safety margins based on concurrency
-4. Automatic synchronization with Shopify's throttle status
+1. Always release concurrency after operations:
+```typescript
+try {
+  // Your API call
+} finally {
+  await rateLimiter.releaseConcurrency(shop);
+}
+```
 
-Key features:
-- Atomic operations using Lua scripts
-- Distributed locking via Redis
-- Concurrent request tracking
-- Adaptive rate limiting based on actual Shopify feedback
+2. Implement exponential backoff for retries:
+```typescript
+let retries = 0;
+while (retries < maxRetries) {
+  const result = await rateLimiter.checkLimit(shop, cost, config);
+  if (result.allowed) {
+    return await makeApiCall();
+  }
+  await new Promise(resolve => setTimeout(resolve, result.waitTimeMs * Math.pow(2, retries)));
+  retries++;
+}
+```
 
-## Contributing
+3. Regularly sync with Shopify's throttle state:
+```typescript
+// After each API call, update with values from headers
+await rateLimiter.syncShopifyState(shop, {
+  maximumAvailable: parseInt(headers['x-shopify-shop-api-call-limit'].split('/')[1]),
+  currentlyAvailable: parseInt(headers['x-shopify-shop-api-call-limit'].split('/')[0]),
+  restoreRate: 50 // Adjust based on your API version and limit
+});
+```
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+## Error Handling
+
+The rate limiter throws errors for invalid configurations:
+- Invalid bucket capacity
+- Invalid tokens per second
+- Invalid max concurrency
+
+Always wrap rate limiter calls in try-catch blocks and implement appropriate error handling.
 
 ## License
 
-MIT License
+MIT
 
-## Acknowledgments
+## Contributing
 
-- Inspired by Shopify's GraphQL rate limiting mechanism
-- Built with Redis and ioredis
-- Testing powered by Vitest
+Contributions are welcome! Please submit issues and pull requests on GitHub.
